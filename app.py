@@ -15,9 +15,9 @@ stocks = [
 @st.cache_data
 def analyze_stock(ticker):
     try:
-        data = yf.download(ticker, period="6mo", progress=False)
+        data = yf.download(ticker, period="6mo", progress=False, threads=False)
 
-        if len(data) < 50:
+        if data is None or data.empty or len(data) < 50:
             return None
 
         data["Return"] = data["Close"].pct_change()
@@ -32,7 +32,11 @@ def analyze_stock(ticker):
 
         avg_volume = data["Volume"].mean()
         recent_volume = data["Volume"].iloc[-1]
-        volume_spike = recent_volume / avg_volume
+
+        if avg_volume == 0:
+            volume_spike = 0
+        else:
+            volume_spike = recent_volume / avg_volume
 
         score = (
             (momentum * 100) * 0.4 +
@@ -51,8 +55,9 @@ def analyze_stock(ticker):
         }
 
     except Exception as e:
-    st.error(f"Erreur sur {ticker}: {e}")
-    return None
+        st.warning(f"Erreur sur {ticker}")
+        return None
+
 
 results = []
 
@@ -79,10 +84,17 @@ if not df.empty:
 
     stock_selected = st.selectbox("📊 Analyse détaillée", df["Stock"])
 
-    data = yf.download(stock_selected, period="6mo", progress=False)
+    try:
+        data = yf.download(stock_selected, period="6mo", progress=False, threads=False)
 
-    st.subheader(f"📈 Graphique : {stock_selected}")
-    st.line_chart(data["Close"])
+        if not data.empty:
+            st.subheader(f"📈 Graphique : {stock_selected}")
+            st.line_chart(data["Close"])
+        else:
+            st.warning("Pas de données pour ce stock")
+
+    except:
+        st.warning("Erreur affichage graphique")
 
 else:
-    st.error("Erreur lors de l'analyse.")
+    st.error("❌ Aucune donnée récupérée (API lente ou bloquée)")
