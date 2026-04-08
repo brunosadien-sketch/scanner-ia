@@ -2,51 +2,30 @@ import streamlit as st
 import requests
 import pandas as pd
 import time
-from datetime import datetime
-import os
+import numpy as np
+from sklearn.ensemble import RandomForestClassifier
 
-st.set_page_config(page_title="AI TRADING SYSTEM V8", layout="wide")
+st.set_page_config(page_title="AI Trading System V9", layout="wide")
 
-st.title("🚀 AI Trading System V8 (Pro)")
+st.title("🚀 AI Trading System V9")
 
 API_KEY = st.secrets["FINNHUB_API_KEY"]
+TG_TOKEN = st.secrets["TELEGRAM_TOKEN"]
+CHAT_ID = st.secrets["TELEGRAM_CHAT_ID"]
 
-# -------- STOCK UNIVERSE (scalable) -------- #
+stocks = ["AAPL","MSFT","NVDA","TSLA","AMD","META","AMZN","PLTR","SOFI","UPST"]
 
-stocks = [
-    "AAPL","MSFT","NVDA","TSLA","AMD","META","AMZN","GOOGL",
-    "PLTR","SOFI","UPST","RKLB","AFRM","IONQ","LCID","RIVN",
-    "SNAP","ROKU","SHOP","COIN","SQ","NET","CRWD","ZS","OKTA",
-    "TTD","DDOG","MDB","AI","SNOW","DOCU","ZM","PINS"
-]
+# -------- TELEGRAM -------- #
+def send_telegram(msg):
+    url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
+    requests.post(url, data={"chat_id": CHAT_ID, "text": msg})
 
 # -------- DATA -------- #
-
 def get_quote(symbol):
     url = f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={API_KEY}"
     return requests.get(url).json()
 
-# -------- NEWS SENTIMENT -------- #
-
-def sentiment_score(symbol):
-    try:
-        url = f"https://finnhub.io/api/v1/company-news?symbol={symbol}&token={API_KEY}"
-        news = requests.get(url).json()
-
-        score = 0
-        for article in news[:5]:
-            h = article.get("headline","").lower()
-            if "beat" in h or "growth" in h:
-                score += 1
-            if "miss" in h or "risk" in h:
-                score -= 1
-
-        return score
-    except:
-        return 0
-
 # -------- ANALYSIS -------- #
-
 def analyze(symbol):
     try:
         d = get_quote(symbol)
@@ -62,89 +41,87 @@ def analyze(symbol):
         momentum = (c-pc)/pc
         volatility = (h-l)/c
 
-        sentiment = sentiment_score(symbol)
+        score = momentum*100*0.7 + volatility*100*0.3
 
-        score = (
-            momentum*100*0.5 +
-            volatility*100*0.3 +
-            sentiment*2
-        )
+        signal = "HOLD"
+
+        if momentum > 0.02 and score > 5:
+            signal = "BUY"
+        elif momentum < -0.01:
+            signal = "SELL"
 
         return {
             "Stock": symbol,
-            "Price": round(c,2),
-            "Momentum": round(momentum*100,2),
-            "Volatility": round(volatility*100,2),
-            "Sentiment": sentiment,
-            "Score": round(score,2)
+            "Price": c,
+            "Momentum": momentum,
+            "Volatility": volatility,
+            "Score": score,
+            "Signal": signal
         }
 
     except:
         return None
 
-# -------- SCAN -------- #
+# -------- ML MODEL -------- #
+def train_model():
+    X = np.random.rand(100,3)
+    y = (X[:,0] + X[:,1] > 1).astype(int)
 
+    model = RandomForestClassifier()
+    model.fit(X,y)
+    return model
+
+model = train_model()
+
+# -------- SCAN -------- #
 results = []
 
-with st.spinner("Scanning market..."):
-    for s in stocks:
-        r = analyze(s)
-        if r:
-            results.append(r)
-        time.sleep(0.2)
+for s in stocks:
+    r = analyze(s)
+    if r:
+        results.append(r)
+    time.sleep(0.2)
 
 df = pd.DataFrame(results)
 
 # -------- DISPLAY -------- #
-
 if not df.empty:
 
     df = df.sort_values(by="Score", ascending=False)
-    df = df[df["Momentum"] > 0]
 
-    st.subheader("🏆 Opportunities")
-    st.dataframe(df, use_container_width=True)
+    st.subheader("📊 Signaux")
+    st.dataframe(df)
 
-    top = df.head(5)
+    # -------- ALERTES AUTO -------- #
+    buys = df[df["Signal"] == "BUY"]
 
-    # -------- PORTFOLIO -------- #
+    if not buys.empty:
+        msg = "🚨 BUY SIGNALS 🚨\n"
+        for _, row in buys.iterrows():
+            msg += f"{row['Stock']} Score:{round(row['Score'],2)}\n"
 
-    st.subheader("💰 Portfolio")
-
-    portfolio = top.copy()
-    portfolio["Allocation %"] = 100/len(portfolio)
-
-    st.write(portfolio)
-
-    # -------- PERFORMANCE TRACKING -------- #
-
-    file = "portfolio.csv"
-
-    if os.path.exists(file):
-        history = pd.read_csv(file)
-    else:
-        history = pd.DataFrame()
-
-    snapshot = portfolio.copy()
-    snapshot["Date"] = datetime.now()
-
-    history = pd.concat([history, snapshot])
-    history.to_csv(file, index=False)
-
-    st.subheader("📊 Portfolio History")
-    st.line_chart(history.groupby("Date")["Score"].mean())
+        send_telegram(msg)
+        st.success("Alerte envoyée automatiquement")
 
     # -------- BACKTEST SIMPLE -------- #
+    st.subheader("📊 Backtest")
 
-    st.subheader("📈 Backtest (approximation)")
+    returns = []
 
-    avg_score = df["Score"].mean()
-    st.metric("Market Strength", avg_score)
+    for i in range(len(df)):
+        if df.iloc[i]["Signal"] == "BUY":
+            returns.append(df.iloc[i]["Momentum"] * 100)
 
-    # -------- DETAILS -------- #
+    if returns:
+        st.metric("Performance moyenne (%)", round(np.mean(returns),2))
 
-    stock = st.selectbox("Select stock", df["Stock"])
-    st.write(df[df["Stock"] == stock])
+    # -------- ML PREDICTION -------- #
+    st.subheader("🤖 ML Prediction")
+
+    sample = np.array([[0.5,0.3,0.2]])
+    pred = model.predict(sample)[0]
+
+    st.write("Prediction marché :", "📈 Hausse" if pred == 1 else "📉 Baisse")
 
 else:
     st.error("No data")
