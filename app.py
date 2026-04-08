@@ -1,71 +1,83 @@
 import streamlit as st
-import yfinance as yf
+import requests
 import pandas as pd
 import time
 
-st.set_page_config(page_title="Scanner IA", layout="wide")
+st.set_page_config(page_title="Scanner IA PRO", layout="wide")
 
-st.title("🚀 Scanner IA - Opportunités Small & Mid Caps")
+st.title("🚀 Scanner IA PRO - Opportunités Marché")
 
-# ⚠️ Moins d'actions = plus stable
-stocks = ["PLTR","SOFI","UPST","RKLB","AFRM"]
+API_KEY = st.secrets["FINNHUB_API_KEY"]
 
-def analyze_stock(ticker):
+# Liste élargie (tu peux en ajouter)
+stocks = [
+    "PLTR","SOFI","UPST","RKLB","AFRM",
+    "IONQ","LCID","RIVN","HOOD","U"
+]
+
+def get_data(symbol):
+    url = f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={API_KEY}"
+    r = requests.get(url)
+    return r.json()
+
+def analyze_stock(symbol):
     try:
-        data = yf.download(
-            ticker,
-            period="3mo",
-            interval="1d",
-            progress=False,
-            threads=False
-        )
+        data = get_data(symbol)
 
-        if data.empty or len(data) < 20:
+        current = data.get("c", 0)
+        prev_close = data.get("pc", 0)
+        high = data.get("h", 0)
+        low = data.get("l", 0)
+
+        if current == 0 or prev_close == 0:
             return None
 
-        data["Return"] = data["Close"].pct_change()
+        momentum = (current - prev_close) / prev_close
+        volatility = (high - low) / current if current != 0 else 0
 
-        momentum = data["Return"].mean()
-        volatility = data["Return"].std()
-
-        score = momentum / volatility if volatility != 0 else 0
+        score = (momentum * 100) - (volatility * 10)
 
         return {
-            "Stock": ticker,
-            "Score": round(score, 3),
-            "Momentum": round(momentum, 4),
-            "Volatility": round(volatility, 4)
+            "Stock": symbol,
+            "Prix": round(current, 2),
+            "Momentum": round(momentum, 3),
+            "Volatility": round(volatility, 3),
+            "Score": round(score, 2)
         }
 
-    except Exception as e:
-        st.warning(f"Erreur sur {ticker}")
+    except:
+        st.warning(f"Erreur sur {symbol}")
         return None
 
 
 results = []
 
-with st.spinner("Analyse en cours..."):
+with st.spinner("Analyse du marché en cours..."):
     for stock in stocks:
         res = analyze_stock(stock)
         if res:
             results.append(res)
-        time.sleep(1)  # 🔥 évite blocage API
+        time.sleep(0.5)
 
 df = pd.DataFrame(results)
 
 if not df.empty:
     df = df.sort_values(by="Score", ascending=False)
 
-    st.subheader("🏆 Top opportunités")
-    st.dataframe(df, use_container_width=True)
+    col1, col2 = st.columns([2, 1])
 
-    stock_selected = st.selectbox("📊 Choisir une action", df["Stock"])
+    with col1:
+        st.subheader("🏆 Top opportunités")
+        st.dataframe(df, use_container_width=True)
 
-    try:
-        data = yf.download(stock_selected, period="3mo", progress=False, threads=False)
-        st.line_chart(data["Close"])
-    except:
-        st.warning("Erreur graphique")
+    with col2:
+        st.subheader("🔥 Top 3")
+        st.write(df.head(3))
+
+    stock_selected = st.selectbox("📊 Détail", df["Stock"])
+
+    st.subheader(f"📈 Données : {stock_selected}")
+    st.write(df[df["Stock"] == stock_selected])
 
 else:
-    st.error("❌ Impossible de récupérer les données (limite API)")
+    st.error("❌ Impossible de récupérer les données")
