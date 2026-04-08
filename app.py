@@ -50,9 +50,9 @@ def analyze_stock(ticker):
             "Volume Spike": volume_spike
         }
 
-    except:
-        return None
-
+    except Exception as e:
+    st.error(f"Erreur sur {ticker}: {e}")
+    return None
 
 results = []
 
