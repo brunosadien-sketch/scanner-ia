@@ -2,12 +2,34 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
+import requests
 
-st.set_page_config(page_title="AI Trading System V14 STABLE", layout="wide")
+st.set_page_config(page_title="AI Trading System V15", layout="wide")
 
-st.title("🚀 AI Trading System V14 - STABLE VERSION")
+st.title("🚀 AI Trading System V15 - Small & Mid Caps + Alerts")
 
-stocks = ["AAPL","MSFT","NVDA","TSLA","AMD","META","AMZN"]
+# -------- TELEGRAM -------- #
+
+def send_telegram(msg):
+    try:
+        token = st.secrets["TELEGRAM_TOKEN"]
+        chat_id = st.secrets["TELEGRAM_CHAT_ID"]
+
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        requests.post(url, data={"chat_id": chat_id, "text": msg})
+
+    except:
+        st.warning("⚠️ Telegram non configuré")
+
+# -------- STOCK LIST (SMALL / MID CAPS) -------- #
+
+stocks = [
+    # US
+    "SOFI","PLTR","UPST","AFRM","OPEN","RUN","IONQ","RKLB","FUBO","LCID","HOOD","RIVN","PATH","U",
+    
+    # Europe
+    "ALNOV.PA","ATE.PA","SOI.PA","DBK.DE","VOW3.DE","ADYEN.AS","ASML.AS"
+]
 
 # -------- STRATEGY -------- #
 
@@ -18,11 +40,9 @@ def strategy_ma(data, short, long):
     data["MA_L"] = data["Close"].rolling(long).mean()
 
     data["Signal"] = 0.0
-
     data.loc[data["MA_S"] > data["MA_L"], "Signal"] = 1.0
     data.loc[data["MA_S"] < data["MA_L"], "Signal"] = -1.0
 
-    # 🔥 nettoyage complet
     data["Signal"] = data["Signal"].fillna(0).astype(float)
 
     return data
@@ -34,7 +54,6 @@ def backtest(data):
     position = 0.0
 
     for i in range(len(data)):
-
         try:
             signal = float(data["Signal"].iloc[i])
             price = float(data["Close"].iloc[i])
@@ -79,7 +98,6 @@ for stock in stocks:
                     continue
 
                 temp = strategy_ma(data, short, long)
-
                 perf = backtest(temp)
 
                 if perf > best_perf:
@@ -88,7 +106,7 @@ for stock in stocks:
 
         results.append({
             "Stock": stock,
-            "Best Strategy": f"MA{best_params[0]}/MA{best_params[1]}",
+            "Strategy": f"MA{best_params[0]}/{best_params[1]}",
             "Performance": round(best_perf, 2)
         })
 
@@ -101,35 +119,28 @@ df = pd.DataFrame(results)
 
 if not df.empty:
 
-    st.subheader("🏆 Best Strategies")
+    df = df.sort_values(by="Performance", ascending=False)
+
+    st.subheader("🏆 Top Opportunités")
     st.dataframe(df, use_container_width=True)
 
-    best_global = df.sort_values(by="Performance", ascending=False).iloc[0]
+    # -------- ALERTES -------- #
 
-    st.subheader("🔥 Best Global Strategy")
-    st.write(best_global)
+    strong = df[df["Performance"] > 1200]  # seuil
 
-    # -------- LIVE SIGNAL -------- #
+    if not strong.empty:
 
-    st.subheader("📊 Live Signal")
+        msg = "🚨 OPPORTUNITÉS DÉTECTÉES 🚨\n\n"
 
-    best_stock = best_global["Stock"]
+        for _, row in strong.iterrows():
+            msg += f"{row['Stock']} | {row['Strategy']} | Perf: {row['Performance']}\n"
 
-    data = yf.download(best_stock, period="3mo", progress=False)
+        send_telegram(msg)
 
-    if not data.empty:
+        st.success("📲 Alerte Telegram envoyée")
 
-        data = data.dropna()
-
-        short, long = map(int, best_global["Best Strategy"].replace("MA","").split("/"))
-
-        data = strategy_ma(data, short, long)
-
-        last_signal = float(data["Signal"].iloc[-1])
-
-        signal = "📈 BUY" if last_signal == 1.0 else "📉 SELL"
-
-        st.metric("Signal actuel", signal)
+    else:
+        st.info("Aucune opportunité forte")
 
 else:
-    st.error("❌ Aucune donnée disponible")
+    st.error("❌ Aucune donnée récupérée")
