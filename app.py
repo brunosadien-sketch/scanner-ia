@@ -1,127 +1,152 @@
 import streamlit as st
-import requests
+import yfinance as yf
 import pandas as pd
-import time
 import numpy as np
-from sklearn.ensemble import RandomForestClassifier
+import requests
+import time
 
-st.set_page_config(page_title="AI Trading System V9", layout="wide")
+st.set_page_config(page_title="AI Trading System V11", layout="wide")
 
-st.title("🚀 AI Trading System V9")
+st.title("🚀 AI Trading System V11 - Dynamic Market Scanner")
 
-API_KEY = st.secrets["FINNHUB_API_KEY"]
 TG_TOKEN = st.secrets["TELEGRAM_TOKEN"]
 CHAT_ID = st.secrets["TELEGRAM_CHAT_ID"]
-
-stocks = ["AAPL","MSFT","NVDA","TSLA","AMD","META","AMZN","PLTR","SOFI","UPST"]
 
 # -------- TELEGRAM -------- #
 def send_telegram(msg):
     url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
     requests.post(url, data={"chat_id": CHAT_ID, "text": msg})
 
-# -------- DATA -------- #
-def get_quote(symbol):
-    url = f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={API_KEY}"
-    return requests.get(url).json()
+# -------- DYNAMIC UNIVERSE -------- #
+
+def get_universe():
+    # US Small & Mid Caps (sample large)
+    us = [
+        "PLTR","SOFI","UPST","RKLB","AFRM","IONQ","LCID","RIVN",
+        "FUBO","OPEN","RUN","U","PATH","HOOD","AI","SNOW"
+    ]
+
+    # Europe
+    eu = [
+        "AIR.PA","MC.PA","OR.PA","BNP.PA","SAN.PA",
+        "SAP.DE","ASML.AS","ADYEN.AS"
+    ]
+
+    return us + eu
+
+# -------- FAST FILTER -------- #
+
+def fast_filter(stocks):
+    selected = []
+
+    for s in stocks:
+        try:
+            data = yf.download(s, period="1mo", progress=False)
+
+            if data.empty:
+                continue
+
+            vol = data["Volume"].mean()
+            returns = data["Close"].pct_change().std()
+
+            # Filtre intelligent
+            if vol > 300000 and returns > 0.02:
+                selected.append(s)
+
+        except:
+            continue
+
+    return selected
 
 # -------- ANALYSIS -------- #
-def analyze(symbol):
+
+def analyze(stock):
     try:
-        d = get_quote(symbol)
+        data = yf.download(stock, period="6mo", progress=False)
 
-        c = d.get("c",0)
-        pc = d.get("pc",0)
-        h = d.get("h",0)
-        l = d.get("l",0)
-
-        if c == 0 or pc == 0:
+        if len(data) < 50:
             return None
 
-        momentum = (c-pc)/pc
-        volatility = (h-l)/c
+        data["MA20"] = data["Close"].rolling(20).mean()
+        data["Return"] = data["Close"].pct_change()
 
-        score = momentum*100*0.7 + volatility*100*0.3
+        last = data.iloc[-1]
+
+        momentum = data["Return"].mean()
+        volatility = data["Return"].std()
+
+        score = momentum*100*0.6 + volatility*100*0.4
 
         signal = "HOLD"
-
         if momentum > 0.02 and score > 5:
             signal = "BUY"
         elif momentum < -0.01:
             signal = "SELL"
 
         return {
-            "Stock": symbol,
-            "Price": c,
-            "Momentum": momentum,
-            "Volatility": volatility,
-            "Score": score,
+            "Stock": stock,
+            "Price": round(last["Close"],2),
+            "Momentum": round(momentum*100,2),
+            "Volatility": round(volatility*100,2),
+            "Score": round(score,2),
             "Signal": signal
         }
 
     except:
         return None
 
-# -------- ML MODEL -------- #
-def train_model():
-    X = np.random.rand(100,3)
-    y = (X[:,0] + X[:,1] > 1).astype(int)
+# -------- MAIN -------- #
 
-    model = RandomForestClassifier()
-    model.fit(X,y)
-    return model
+universe = get_universe()
 
-model = train_model()
+st.write(f"🌍 Universe size: {len(universe)}")
 
-# -------- SCAN -------- #
+with st.spinner("⚡ Filtering market..."):
+    filtered = fast_filter(universe)
+
+st.write(f"🎯 After filter: {len(filtered)} stocks")
+
 results = []
 
-for s in stocks:
-    r = analyze(s)
-    if r:
-        results.append(r)
-    time.sleep(0.2)
+with st.spinner("🔍 Scanning opportunities..."):
+    for stock in filtered:
+        res = analyze(stock)
+        if res:
+            results.append(res)
+        time.sleep(0.1)
 
 df = pd.DataFrame(results)
 
 # -------- DISPLAY -------- #
+
 if not df.empty:
 
     df = df.sort_values(by="Score", ascending=False)
 
-    st.subheader("📊 Signaux")
-    st.dataframe(df)
+    st.subheader("🏆 Opportunities")
+    st.dataframe(df, use_container_width=True)
 
-    # -------- ALERTES AUTO -------- #
+    # -------- ALERTES -------- #
+
     buys = df[df["Signal"] == "BUY"]
 
     if not buys.empty:
-        msg = "🚨 BUY SIGNALS 🚨\n"
+        msg = "🚨 BUY SIGNALS 🚨\n\n"
         for _, row in buys.iterrows():
-            msg += f"{row['Stock']} Score:{round(row['Score'],2)}\n"
+            msg += f"{row['Stock']} Score:{row['Score']}\n"
 
         send_telegram(msg)
-        st.success("Alerte envoyée automatiquement")
+        st.success("📲 Telegram alert sent")
 
-    # -------- BACKTEST SIMPLE -------- #
-    st.subheader("📊 Backtest")
+    # -------- TOP PICKS -------- #
 
-    returns = []
+    st.subheader("🔥 Top Picks")
+    st.write(df.head(5))
 
-    for i in range(len(df)):
-        if df.iloc[i]["Signal"] == "BUY":
-            returns.append(df.iloc[i]["Momentum"] * 100)
+    # -------- DETAIL -------- #
 
-    if returns:
-        st.metric("Performance moyenne (%)", round(np.mean(returns),2))
-
-    # -------- ML PREDICTION -------- #
-    st.subheader("🤖 ML Prediction")
-
-    sample = np.array([[0.5,0.3,0.2]])
-    pred = model.predict(sample)[0]
-
-    st.write("Prediction marché :", "📈 Hausse" if pred == 1 else "📉 Baisse")
+    stock = st.selectbox("📊 Select stock", df["Stock"])
+    st.write(df[df["Stock"] == stock])
 
 else:
-    st.error("No data")
+    st.error("No opportunities found")
