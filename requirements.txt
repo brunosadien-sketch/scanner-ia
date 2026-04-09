@@ -1,5 +1,5 @@
 streamlit
-requests
+yfinance
 pandas
 numpy
-scikit-learn
+requests
