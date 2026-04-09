@@ -2,151 +2,101 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
-import requests
-import time
 
-st.set_page_config(page_title="AI Trading System V11", layout="wide")
+st.set_page_config(page_title="AI Trading System V14", layout="wide")
 
-st.title("🚀 AI Trading System V11 - Dynamic Market Scanner")
+st.title("🚀 AI Trading System V14 - Auto Optimization")
 
-TG_TOKEN = st.secrets["TELEGRAM_TOKEN"]
-CHAT_ID = st.secrets["TELEGRAM_CHAT_ID"]
+stocks = ["AAPL","MSFT","NVDA","TSLA","AMD","META","AMZN"]
 
-# -------- TELEGRAM -------- #
-def send_telegram(msg):
-    url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
-    requests.post(url, data={"chat_id": CHAT_ID, "text": msg})
+# -------- STRATEGIES -------- #
 
-# -------- DYNAMIC UNIVERSE -------- #
+def strategy_ma(data, short, long):
+    data["MA_S"] = data["Close"].rolling(short).mean()
+    data["MA_L"] = data["Close"].rolling(long).mean()
 
-def get_universe():
-    # US Small & Mid Caps (sample large)
-    us = [
-        "PLTR","SOFI","UPST","RKLB","AFRM","IONQ","LCID","RIVN",
-        "FUBO","OPEN","RUN","U","PATH","HOOD","AI","SNOW"
-    ]
+    data["Signal"] = 0
+    data.loc[data["MA_S"] > data["MA_L"], "Signal"] = 1
+    data.loc[data["MA_S"] < data["MA_L"], "Signal"] = -1
 
-    # Europe
-    eu = [
-        "AIR.PA","MC.PA","OR.PA","BNP.PA","SAN.PA",
-        "SAP.DE","ASML.AS","ADYEN.AS"
-    ]
+    return data
 
-    return us + eu
+def backtest(data):
+    capital = 1000
+    position = 0
 
-# -------- FAST FILTER -------- #
+    for i in range(50, len(data)):
 
-def fast_filter(stocks):
-    selected = []
+        if data["Signal"].iloc[i] == 1 and position == 0:
+            position = capital / data["Close"].iloc[i]
+            capital = 0
 
-    for s in stocks:
-        try:
-            data = yf.download(s, period="1mo", progress=False)
+        elif data["Signal"].iloc[i] == -1 and position > 0:
+            capital = position * data["Close"].iloc[i]
+            position = 0
 
-            if data.empty:
-                continue
+    final = capital if capital > 0 else position * data["Close"].iloc[-1]
+    return final
 
-            vol = data["Volume"].mean()
-            returns = data["Close"].pct_change().std()
-
-            # Filtre intelligent
-            if vol > 300000 and returns > 0.02:
-                selected.append(s)
-
-        except:
-            continue
-
-    return selected
-
-# -------- ANALYSIS -------- #
-
-def analyze(stock):
-    try:
-        data = yf.download(stock, period="6mo", progress=False)
-
-        if len(data) < 50:
-            return None
-
-        data["MA20"] = data["Close"].rolling(20).mean()
-        data["Return"] = data["Close"].pct_change()
-
-        last = data.iloc[-1]
-
-        momentum = data["Return"].mean()
-        volatility = data["Return"].std()
-
-        score = momentum*100*0.6 + volatility*100*0.4
-
-        signal = "HOLD"
-        if momentum > 0.02 and score > 5:
-            signal = "BUY"
-        elif momentum < -0.01:
-            signal = "SELL"
-
-        return {
-            "Stock": stock,
-            "Price": round(last["Close"],2),
-            "Momentum": round(momentum*100,2),
-            "Volatility": round(volatility*100,2),
-            "Score": round(score,2),
-            "Signal": signal
-        }
-
-    except:
-        return None
-
-# -------- MAIN -------- #
-
-universe = get_universe()
-
-st.write(f"🌍 Universe size: {len(universe)}")
-
-with st.spinner("⚡ Filtering market..."):
-    filtered = fast_filter(universe)
-
-st.write(f"🎯 After filter: {len(filtered)} stocks")
+# -------- AUTO OPTIMIZATION -------- #
 
 results = []
 
-with st.spinner("🔍 Scanning opportunities..."):
-    for stock in filtered:
-        res = analyze(stock)
-        if res:
-            results.append(res)
-        time.sleep(0.1)
+for stock in stocks:
+
+    data = yf.download(stock, period="1y", progress=False)
+
+    best_perf = 0
+    best_params = None
+
+    for short in [5,10,20]:
+        for long in [30,50,100]:
+
+            if short >= long:
+                continue
+
+            temp = data.copy()
+            temp = strategy_ma(temp, short, long)
+
+            perf = backtest(temp)
+
+            if perf > best_perf:
+                best_perf = perf
+                best_params = (short, long)
+
+    results.append({
+        "Stock": stock,
+        "Best Strategy": f"MA{best_params[0]}/MA{best_params[1]}",
+        "Performance": round(best_perf,2)
+    })
 
 df = pd.DataFrame(results)
 
 # -------- DISPLAY -------- #
 
-if not df.empty:
+st.subheader("🏆 Best Strategies")
 
-    df = df.sort_values(by="Score", ascending=False)
+st.dataframe(df)
 
-    st.subheader("🏆 Opportunities")
-    st.dataframe(df, use_container_width=True)
+best_global = df.sort_values(by="Performance", ascending=False).iloc[0]
 
-    # -------- ALERTES -------- #
+st.subheader("🔥 Best Global Strategy")
+st.write(best_global)
 
-    buys = df[df["Signal"] == "BUY"]
+# -------- LIVE SIGNAL -------- #
 
-    if not buys.empty:
-        msg = "🚨 BUY SIGNALS 🚨\n\n"
-        for _, row in buys.iterrows():
-            msg += f"{row['Stock']} Score:{row['Score']}\n"
+st.subheader("📊 Live Signal")
 
-        send_telegram(msg)
-        st.success("📲 Telegram alert sent")
+best_stock = best_global["Stock"]
 
-    # -------- TOP PICKS -------- #
+data = yf.download(best_stock, period="3mo", progress=False)
 
-    st.subheader("🔥 Top Picks")
-    st.write(df.head(5))
+short, long = map(int, best_global["Best Strategy"].replace("MA","").split("/"))
 
-    # -------- DETAIL -------- #
+data = strategy_ma(data, short, long)
 
-    stock = st.selectbox("📊 Select stock", df["Stock"])
-    st.write(df[df["Stock"] == stock])
+last_signal = data["Signal"].iloc[-1]
 
-else:
-    st.error("No opportunities found")
+signal = "BUY" if last_signal == 1 else "SELL"
+
+st.metric("Signal actuel", signal)
